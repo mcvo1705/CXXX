@@ -23,9 +23,13 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build
-        run: ./gradlew make
+        run: ./gradlew build
+
+      - name: Find cs3
+        run: find . -name "*.cs3"
 
       - uses: actions/upload-artifact@v4
         with:
           name: cs3
-          path: '**/*.cs3'
+          path: |
+            **/*.cs3
