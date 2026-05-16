@@ -1,4 +1,4 @@
-name: Build Plugins
+name: Build Sextb
 
 on:
   workflow_dispatch:
@@ -20,18 +20,34 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Grant execute permission
+      - name: Grant permission
         run: chmod +x gradlew
 
-      - name: Build all plugins
-        run: ./gradlew make
+      - name: Build Plugin
+        run: ./gradlew :Sextb:make
+
+      - name: Prepare builds folder
+        run: |
+          mkdir -p builds
+          find . -name "*.cs3" -exec cp {} builds/ \;
+
+      - name: Generate plugins.json
+        run: |
+          echo '[
+            {
+              "name": "Sextb",
+              "url": "https://raw.githubusercontent.com/mcvo1705/CXXX/master/builds/Sextb.cs3",
+              "version": 1
+            }
+          ]' > builds/plugins.json
 
       - name: Commit builds
         run: |
           git config --global user.name github-actions
           git config --global user.email github-actions@github.com
 
-          git add builds/
+          git add builds
+
           git commit -m "Update builds" || echo "No changes"
 
           git push
