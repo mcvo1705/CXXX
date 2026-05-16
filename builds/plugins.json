@@ -2,6 +2,8 @@
   {
     "name": "Sextb",
     "url": "https://raw.githubusercontent.com/mcvo1705/CXXX/master/builds/Sextb.cs3",
-    "version": 1
+    "version": 2,
+    "status": 1,
+    "description": "Sextb provider"
   }
 ]
