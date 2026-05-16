@@ -12,9 +12,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
@@ -22,14 +24,15 @@ jobs:
       - name: Grant Permission
         run: chmod +x gradlew
 
-      - name: Build
-        run: ./gradlew build
+      - name: Build Sextb Only
+        run: ./gradlew :Sextb:make
 
       - name: Find cs3
         run: find . -name "*.cs3"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload cs3
+        uses: actions/upload-artifact@v4
         with:
-          name: cs3
+          name: Sextb
           path: |
             **/*.cs3
