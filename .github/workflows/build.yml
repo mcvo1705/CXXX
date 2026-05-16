@@ -31,15 +31,8 @@ jobs:
           mkdir -p builds
           find . -name "*.cs3" -exec cp {} builds/ \;
 
-      - name: Generate plugins.json
-        run: |
-          echo '[
-            {
-              "name": "Sextb",
-              "url": "https://raw.githubusercontent.com/mcvo1705/CXXX/master/builds/Sextb.cs3",
-              "version": 1
-            }
-          ]' > builds/plugins.json
+      # ❌ KHÔNG generate plugins.json nữa
+      # 👉 file này sẽ do bạn quản lý thủ công
 
       - name: Commit builds
         run: |
