@@ -1,0 +1,8 @@
+{
+  "name": "MCVO Repo",
+  "description": "My CloudStream Repo",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/mcvo1705/CXXX/master/builds/plugins.json"
+  ]
+}
