@@ -1,6 +1,7 @@
 name: Build Plugins
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - master
@@ -22,11 +23,15 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Build Plugins
+      - name: Build all plugins
         run: ./gradlew make
 
-      - name: Upload builds
-        uses: actions/upload-artifact@v4
-        with:
-          name: builds
-          path: builds
+      - name: Commit builds
+        run: |
+          git config --global user.name github-actions
+          git config --global user.email github-actions@github.com
+
+          git add builds/
+          git commit -m "Update builds" || echo "No changes"
+
+          git push
