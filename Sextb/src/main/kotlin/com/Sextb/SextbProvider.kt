@@ -1,4 +1,3 @@
-```kotlin
 package com.Sextb
 
 import com.lagradost.cloudstream3.*
@@ -8,24 +7,20 @@ import org.jsoup.nodes.Element
 
 class SextbProvider : MainAPI() {
 
-    override var mainUrl              = "https://sextb.date"
-    override var name                 = "Sextb"
-    override val hasMainPage          = true
-    override var lang                 = "en"
-    override val hasDownloadSupport   = true
-    override val hasChromecastSupport = true
-    override val supportedTypes       = setOf(TvType.NSFW)
-    override val vpnStatus            = VPNStatus.MightBeNeeded
+    override var mainUrl = "https://sextb.date"
+    override var name = "Sextb"
+    override val hasMainPage = true
+    override var lang = "en"
+    override val hasDownloadSupport = true
+    override val supportedTypes = setOf(TvType.NSFW)
 
-    private val ajaxUrl by lazy {
-        "$mainUrl/ajax/player"
-    }
+    private val ajaxUrl = "$mainUrl/ajax/player"
 
     override val mainPage = mainPageOf(
         "/amateur" to "Amateur",
         "/censored" to "Censored",
         "/uncensored" to "Uncensored",
-        "/subtitle" to "English Subtitled"
+        "/subtitle" to "Subtitles"
     )
 
     override suspend fun getMainPage(
@@ -33,30 +28,20 @@ class SextbProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
 
-        val document = app.get(
-            "$mainUrl${request.data}/pg-$page",
-            headers = defaultHeaders
-        ).document
+        val doc = app.get("$mainUrl${request.data}/pg-$page").document
 
-        val items = document
-            .select(".tray-item")
-            .mapNotNull { it.toSearchResult() }
+        val home = doc.select(".tray-item").mapNotNull {
+            it.toSearchResult()
+        }
 
         return newHomePageResponse(
             HomePageList(
                 request.name,
-                items,
-                isHorizontalImages = false
+                home
             ),
-            hasNext = items.isNotEmpty()
+            hasNext = true
         )
     }
-
-    private val defaultHeaders = mapOf(
-        "Referer" to "$mainUrl/",
-        "Origin" to mainUrl,
-        "User-Agent" to USER_AGENT
-    )
 
     private fun getRequestBody(
         episode: String,
@@ -71,71 +56,59 @@ class SextbProvider : MainAPI() {
 
     private fun Element.toSearchResult(): SearchResponse {
 
-        val title = select(".tray-item-title")
-            .text()
-            .trim()
+        val title = select(".tray-item-title").text()
 
-        val href = fixUrl(
-            selectFirst("a")
-                ?.attr("href")
-                .orEmpty()
-        )
+        val href = mainUrl + select("a").attr("href")
 
-        val poster = selectFirst(".tray-item-thumbnail")
-            ?.attr("data-src")
+        val poster =
+            selectFirst(".tray-item-thumbnail")
+                ?.attr("data-src")
 
         return newMovieSearchResponse(
             title,
             href,
             TvType.NSFW
         ) {
-            posterUrl = poster
+            this.posterUrl = poster
         }
     }
 
     override suspend fun search(
         query: String,
         page: Int
-    ): SearchResponseList? {
+    ): SearchResponseList {
 
-        val document = app.get(
-            "$mainUrl/search/${query.replace(" ", "-")}/pg-$page",
-            headers = defaultHeaders
+        val doc = app.get(
+            "$mainUrl/search/${query.replace(" ", "-")}/pg-$page"
         ).document
 
-        val results = document
-            .select(".tray-item")
-            .mapNotNull { it.toSearchResult() }
+        val results = doc.select(".tray-item").mapNotNull {
+            it.toSearchResult()
+        }
 
         return newSearchResponseList(
             results,
-            results.isNotEmpty()
+            hasNext = results.isNotEmpty()
         )
     }
 
     override suspend fun load(url: String): LoadResponse {
 
-        val document = app.get(
-            url,
-            headers = defaultHeaders
-        ).document
+        val doc = app.get(url).document
 
-        val title = document
-            .selectFirst("meta[property=og:title]")
-            ?.attr("content")
-            ?.replace("| PornHoarder.tv", "")
-            ?.trim()
-            ?: "Unknown"
-
-        val poster = fixUrlNull(
-            document.selectFirst("meta[property=og:image]")
+        val title =
+            doc.selectFirst("meta[property=og:title]")
                 ?.attr("content")
-        )
+                ?.trim()
+                ?: "No Title"
 
-        val description = document
-            .selectFirst("meta[property=og:description]")
-            ?.attr("content")
-            ?.trim()
+        val poster =
+            doc.selectFirst("meta[property=og:image]")
+                ?.attr("content")
+
+        val description =
+            doc.selectFirst("meta[property=og:description]")
+                ?.attr("content")
 
         return newMovieLoadResponse(
             title,
@@ -155,91 +128,45 @@ class SextbProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val document = app.get(
-            data,
-            headers = defaultHeaders
-        ).document
+        val doc = app.get(data).document
 
-        val episodeButtons = document.select(
-            ".episode-list .btn-player"
-        )
+        val episodeList =
+            doc.select(".episode-list .btn-player")
 
-        if (episodeButtons.isEmpty()) {
-            return false
-        }
+        val sourceId =
+            episodeList.firstOrNull()
+                ?.attr("data-source")
+                ?: return false
 
-        val sourceId = episodeButtons
-            .firstOrNull()
-            ?.attr("data-source")
-            .orEmpty()
-
-        episodeButtons.forEach { button ->
-
-            val episodeId = button.attr("data-id")
-
-            if (episodeId.isBlank()) return@forEach
-
-            val serverName = button.text()
-                .trim()
-                .ifBlank { "Server" }
+        episodeList.forEach { item ->
 
             val requestBody = getRequestBody(
-                episodeId,
+                item.attr("data-id"),
                 sourceId
             )
 
             val response = app.post(
                 ajaxUrl,
-                requestBody = requestBody,
-                headers = mapOf(
-                    "Referer" to data,
-                    "Origin" to mainUrl,
-                    "X-Requested-With" to "XMLHttpRequest",
-                    "User-Agent" to USER_AGENT
-                )
+                requestBody = requestBody
             ).document
 
-            val iframeElements = response.select("iframe")
+            val iframe =
+                response.selectFirst("iframe")
+                    ?.attr("src")
+                    ?: return@forEach
 
-            iframeElements.forEach { iframe ->
+            val finalUrl = iframe
+                .replace("\\/", "/")
+                .replace("\\\"", "")
+                .substringBefore("?")
 
-                var iframeUrl = iframe.attr("src")
-
-                iframeUrl = iframeUrl
-                    .replace("\\/", "/")
-                    .replace("\\\"", "")
-                    .trim()
-
-                if (iframeUrl.startsWith("//")) {
-                    iframeUrl = "https:$iframeUrl"
-                }
-
-                if (iframeUrl.isBlank()) {
-                    return@forEach
-                }
-
-                loadExtractor(
-                    iframeUrl,
-                    subtitleCallback
-                ) { link ->
-
-                    callback.invoke(
-                        ExtractorLink(
-                            source = name,
-                            name = "$name - $serverName",
-                            url = link.url,
-                            referer = mainUrl,
-                            quality = link.quality,
-                            isM3u8 = link.isM3u8,
-                            headers = link.headers,
-                            extractorData = link.extractorData
-                        )
-                    )
-                }
-            }
+            loadExtractor(
+                finalUrl,
+                subtitleCallback,
+                callback
+            )
         }
 
         return true
     }
 }
-```
