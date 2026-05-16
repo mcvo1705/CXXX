@@ -1,15 +1,7 @@
 [
   {
     "name": "Sextb",
-    "internalName": "Sextb",
-    "version": 1,
     "url": "https://raw.githubusercontent.com/mcvo1705/CXXX/master/builds/Sextb.cs3",
-    "status": 1,
-    "authors": [
-      "mcvo1705"
-    ],
-    "tvTypes": [
-      "NSFW"
-    ]
+    "version": 1
   }
 ]
