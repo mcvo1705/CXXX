@@ -1,6 +1,10 @@
 name: Build Sextb
 
 on:
+  push:
+    branches:
+      - master
+
   workflow_dispatch:
 
 jobs:
@@ -15,9 +19,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - run: chmod +x gradlew
+      - name: Grant Permission
+        run: chmod +x gradlew
 
-      - run: ./gradlew make
+      - name: Build
+        run: ./gradlew make
 
       - uses: actions/upload-artifact@v4
         with:
