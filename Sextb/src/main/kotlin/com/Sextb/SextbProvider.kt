@@ -1,11 +1,10 @@
 package com.Sextb
 
+import org.jsoup.nodes.Element
+import org.jsoup.Jsoup
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import okhttp3.FormBody
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Element
-import java.net.URLEncoder
 
 class SextbProvider : MainAPI() {
 
@@ -20,11 +19,7 @@ class SextbProvider : MainAPI() {
 
     private val ajaxUrl = "$mainUrl/ajax/player"
 
-    private val domains = listOf(
-        "https://sextb.net",
-        "https://sextb.date"
-    )
-
+    // ================= MAIN PAGE =================
     override val mainPage = mainPageOf(
         "/amateur" to "Amateur",
         "/censored" to "Censored",
@@ -32,54 +27,51 @@ class SextbProvider : MainAPI() {
         "/subtitle" to "English Subtitled"
     )
 
-    // ===================== MAIN PAGE =====================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get("$mainUrl${request.data}/pg-$page").document
+        val doc = app.get("$mainUrl${request.data}/pg-$page").document
 
-        val results = document.select(".tray-item")
+        val list = doc.select(".tray-item")
             .mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(
-            HomePageList(request.name, results, isHorizontalImages = false),
-            hasNext = results.isNotEmpty()
+            HomePageList(request.name, list, isHorizontalImages = false),
+            hasNext = list.isNotEmpty()
         )
     }
 
-    // ===================== SEARCH =====================
+    // ================= SEARCH =================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
-        val encoded = URLEncoder.encode(query, "UTF-8")
+        val doc = app.get("$mainUrl/search/${query.replace(" ", "-")}/pg-$page").document
 
-        val document = app.get("$mainUrl/search/$encoded/pg-$page").document
-
-        val results = document.select(".tray-item")
+        val list = doc.select(".tray-item")
             .mapNotNull { it.toSearchResult() }
 
-        return newSearchResponseList(results, results.isNotEmpty())
+        return newSearchResponseList(list, list.isNotEmpty())
     }
 
-    // ===================== LOAD =====================
+    // ================= LOAD =================
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val doc = app.get(url).document
 
-        val title = document.selectFirst("meta[property=og:title]")
+        val title = doc.selectFirst("meta[property=og:title]")
             ?.attr("content")
             ?.replace("| PornHoarder.tv", "")
             ?.trim()
             ?: "Unknown"
 
-        val poster = document.selectFirst("meta[property=og:image]")
+        val poster = doc.selectFirst("meta[property=og:image]")
             ?.attr("content")
 
-        val description = document.selectFirst("meta[property=og:description]")
+        val desc = doc.selectFirst("meta[property=og:description]")
             ?.attr("content")
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
-            this.posterUrl = poster ?: ""
-            this.plot = description
+            this.posterUrl = poster
+            this.plot = desc
         }
     }
 
-    // ===================== LINKS =====================
+    // ================= LINKS (FIXED MULTI-LAYER) =================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -87,25 +79,21 @@ class SextbProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val document = app.get(data).document
+        val doc = app.get(data).document
 
-        val sourceId = document
-            .selectFirst(".episode-list .btn-player")
+        val sourceId = doc.selectFirst(".episode-list .btn-player")
             ?.attr("data-source")
             ?: return false
 
-        // 👉 CHỈ lấy episode đầu để tránh spam request
-        val episode = document.select(".episode-list .btn-player").firstOrNull()
+        val episode = doc.select(".episode-list .btn-player").firstOrNull()
             ?: return false
 
-        val episodeId = episode.attr("data-id")
-
         val body = FormBody.Builder()
-            .add("episode", episodeId)
+            .add("episode", episode.attr("data-id"))
             .add("filmId", sourceId)
             .build()
 
-        val responseText = app.post(
+        val ajaxResponse = app.post(
             ajaxUrl,
             requestBody = body,
             headers = mapOf(
@@ -114,49 +102,112 @@ class SextbProvider : MainAPI() {
             )
         ).text
 
-        val responseDoc = Jsoup.parse(responseText)
+        val iframeDoc = Jsoup.parse(ajaxResponse)
 
-        val iframes = responseDoc.select("iframe")
+        val iframes = iframeDoc.select("iframe")
 
         iframes.forEachIndexed { index, iframe ->
 
-            val iframeSrc = iframe.attr("src")
-                .substringBefore("?")
-                .trim()
+            val iframeUrl = cleanUrl(iframe.attr("src"))
+                ?: return@forEachIndexed
 
-            if (iframeSrc.isBlank()) return@forEachIndexed
-
-            loadExtractor(
-                iframeSrc,
-                mainUrl,
-                subtitleCallback
-            ) { link ->
-
-                callback(
-                    ExtractorLink(
-                        source = name,
-                        name = "$name Server ${index + 1}",
-                        url = link.url,
-                        referer = mainUrl,
-                        quality = link.quality,
-                        type = link.type,
-                        headers = link.headers
-                    )
-                )
-            }
+            // ================= LAYER 1 =================
+            resolveFinalSources(
+                iframeUrl,
+                subtitleCallback,
+                callback,
+                depth = 0
+            )
         }
 
         return true
     }
 
-    // ===================== HELPERS =====================
+    // ================= CORE RESOLVER =================
+    private suspend fun resolveFinalSources(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+        depth: Int
+    ) {
+        if (depth > 2) return
+
+        val res = app.get(url, referer = mainUrl).text
+        val doc = Jsoup.parse(res)
+
+        // 1) direct video/source
+        val directSources = doc.select("video source, source, video")
+
+        if (directSources.isNotEmpty()) {
+            directSources.forEach {
+                val src = cleanUrl(it.attr("src")) ?: return@forEach
+
+                loadExtractor(src, url, subtitleCallback) { link ->
+                    callback(
+                        ExtractorLink(
+                            source = name,
+                            name = "$name Stream",
+                            url = link.url,
+                            referer = url,
+                            quality = link.quality,
+                            type = link.type,
+                            headers = link.headers
+                        )
+                    )
+                }
+            }
+            return
+        }
+
+        // 2) iframe tiếp (TB / SW / DD / FL / ST / US / PP nằm ở đây)
+        val innerIframes = doc.select("iframe")
+
+        if (innerIframes.isNotEmpty()) {
+            innerIframes.forEach {
+                val next = cleanUrl(it.attr("src")) ?: return@forEach
+
+                resolveFinalSources(
+                    next,
+                    subtitleCallback,
+                    callback,
+                    depth + 1
+                )
+            }
+            return
+        }
+
+        // 3) fallback extractor (quan trọng)
+        loadExtractor(url, mainUrl, subtitleCallback) { link ->
+            callback(
+                ExtractorLink(
+                    source = name,
+                    name = "$name Fallback",
+                    url = link.url,
+                    referer = url,
+                    quality = link.quality,
+                    type = link.type,
+                    headers = link.headers
+                )
+            )
+        }
+    }
+
+    // ================= HELPERS =================
     private fun Element.toSearchResult(): SearchResponse {
-        val title = select(".tray-item-title").text().trim()
+        val title = select(".tray-item-title").text()
         val href = mainUrl + select("a:nth-of-type(1)").attr("href")
         val poster = selectFirst(".tray-item-thumbnail")?.attr("data-src")
 
         return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = poster
         }
+    }
+
+    private fun cleanUrl(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        return url
+            .replace("\\/", "/")
+            .replace("\\\"", "")
+            .substringBefore("?")
     }
 }
