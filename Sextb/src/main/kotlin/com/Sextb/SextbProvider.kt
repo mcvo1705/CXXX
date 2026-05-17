@@ -1,53 +1,36 @@
 package com.Sextb
 
+import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import okhttp3.FormBody
-import org.jsoup.nodes.Element
 
 class SextbProvider : MainAPI() {
-
-    override var mainUrl = "https://sextb.date"
-    override var name = "Sextb"
-    override val hasMainPage = true
-    override var lang = "en"
-    override val hasDownloadSupport = true
-    override val supportedTypes = setOf(TvType.NSFW)
+    override var mainUrl              = "https://sextb.net"
+    override var name                 = "Sextb"
+    override val hasMainPage          = true
+    override var lang                 = "en"
+    override val hasDownloadSupport   = true
+    override val hasChromecastSupport = true
+    override val supportedTypes       = setOf(TvType.NSFW)
+    override val vpnStatus            = VPNStatus.MightBeNeeded
 
     private val ajaxUrl = "$mainUrl/ajax/player"
 
     override val mainPage = mainPageOf(
         "/amateur" to "Amateur",
         "/censored" to "Censored",
-        "/uncensored" to "Uncensored",
-        "/subtitle" to "Subtitles"
+        "/uncensored" to "Uncensord",
+        "/subtitle" to "English Subtitled"
     )
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-
-        val doc = app.get("$mainUrl${request.data}/pg-$page").document
-
-        val home = doc.select(".tray-item").mapNotNull {
-            it.toSearchResult()
-        }
-
-        return newHomePageResponse(
-            HomePageList(
-                request.name,
-                home
-            ),
-            hasNext = true
-        )
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val document = app.get("$mainUrl${request.data}/pg-$page").document
+        val responseList  = document.select(".tray-item").mapNotNull { it.toSearchResult() }
+        return newHomePageResponse(HomePageList(request.name, responseList, isHorizontalImages = false),hasNext = true)
     }
 
-    private fun getRequestBody(
-        episode: String,
-        filmId: String
-    ): FormBody {
-
+    private fun getRequestBody (episode: String, filmId: String) : FormBody {
         return FormBody.Builder()
             .addEncoded("episode", episode)
             .addEncoded("filmId", filmId)
@@ -55,118 +38,97 @@ class SextbProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse {
-
-        val title = select(".tray-item-title").text()
-
-        val href = mainUrl + select("a").attr("href")
-
-        val poster =
-            selectFirst(".tray-item-thumbnail")
-                ?.attr("data-src")
-
-        return newMovieSearchResponse(
-            title,
-            href,
-            TvType.NSFW
-        ) {
-            this.posterUrl = poster
+        val title = this.select(".tray-item-title").text()
+        val href = mainUrl + this.select("a:nth-of-type(1)").attr("href")
+        val posterUrl = this.selectFirst(".tray-item-thumbnail")?.attr("data-src")
+        return newMovieSearchResponse(title, href, TvType.NSFW) {
+            this.posterUrl = posterUrl
         }
     }
 
-    override suspend fun search(
-        query: String,
-        page: Int
-    ): SearchResponseList {
-
-        val doc = app.get(
-            "$mainUrl/search/${query.replace(" ", "-")}/pg-$page"
-        ).document
-
-        val results = doc.select(".tray-item").mapNotNull {
-            it.toSearchResult()
-        }
-
-        return newSearchResponseList(
-            results,
-            hasNext = results.isNotEmpty()
-        )
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
+        val document = app.get("$mainUrl/search/${query.replace(" ", "-")}/pg-$page").document
+        val results = document.select(".tray-item").mapNotNull { it.toSearchResult() }
+        val hasNext = if(results.isEmpty()) false else true
+        return newSearchResponseList(results, hasNext)
     }
 
     override suspend fun load(url: String): LoadResponse {
-
-        val doc = app.get(url).document
-
-        val title =
-            doc.selectFirst("meta[property=og:title]")
-                ?.attr("content")
-                ?.trim()
-                ?: "No Title"
-
-        val poster =
-            doc.selectFirst("meta[property=og:image]")
-                ?.attr("content")
-
-        val description =
-            doc.selectFirst("meta[property=og:description]")
-                ?.attr("content")
-
-        return newMovieLoadResponse(
-            title,
-            url,
-            TvType.NSFW,
-            url
-        ) {
-            posterUrl = poster
-            plot = description
+        val document = app.get(url).document
+        val title = document.selectFirst("meta[property=og:title]")?.attr("content")?.trim().toString().replace("| PornHoarder.tv","")
+        val poster = fixUrlNull(document.selectFirst("[property='og:image']")?.attr("content"))
+        val description = document.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
+    
+        return newMovieLoadResponse(title, url, TvType.NSFW, url) {
+            this.posterUrl = poster
+            this.plot = description
         }
     }
 
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
 
-        val doc = app.get(data).document
+    val document = app.get(data).document
 
-        val episodeList =
-            doc.select(".episode-list .btn-player")
+    val sourceId = document
+        .selectFirst(".episode-list .btn-player")
+        ?.attr("data-source")
+        ?: return false
 
-        val sourceId =
-            episodeList.firstOrNull()
-                ?.attr("data-source")
-                ?: return false
+    val episodeList = document.select(".episode-list .btn-player")
 
-        episodeList.forEach { item ->
+    episodeList.forEach { item ->
 
-            val requestBody = getRequestBody(
-                item.attr("data-id"),
-                sourceId
+        val episodeId = item.attr("data-id")
+
+        val requestBody = getRequestBody(episodeId, sourceId)
+
+        val response = app.post(
+            ajaxUrl,
+            requestBody = requestBody,
+            headers = mapOf(
+                "Referer" to mainUrl,
+                "X-Requested-With" to "XMLHttpRequest"
             )
+        ).document
 
-            val response = app.post(
-                ajaxUrl,
-                requestBody = requestBody
-            ).document
+        // lấy toàn bộ iframe/server
+        val iframes = response.select("iframe")
 
-            val iframe =
-                response.selectFirst("iframe")
-                    ?.attr("src")
-                    ?: return@forEach
+        iframes.forEachIndexed { index, iframe ->
 
-            val finalUrl = iframe
+            val iframeSrc = iframe.attr("src")
                 .replace("\\/", "/")
                 .replace("\\\"", "")
                 .substringBefore("?")
 
-            loadExtractor(
-                finalUrl,
-                subtitleCallback,
-                callback
-            )
-        }
+            if (iframeSrc.isNotBlank()) {
 
-        return true
+                loadExtractor(
+                    iframeSrc,
+                    subtitleCallback
+                ) { link ->
+
+                    callback.invoke(
+                        ExtractorLink(
+                            source = name,
+                            name = "${name} Server ${index + 1}",
+                            url = link.url,
+                            referer = mainUrl,
+                            quality = link.quality,
+                            type = link.type,
+                            headers = link.headers
+                        )
+                    )
+                }
+            }
+        }
     }
+
+    return true
+  }
 }
