@@ -7,7 +7,7 @@ cloudstream {
 
     status = 1
 
-    tvTypes = listOf(TvType.NSFW)
+    tvTypes = listOf("NSFW")
 
     iconUrl = "https://sextb.net/images/logo.png?v=1"
 }
