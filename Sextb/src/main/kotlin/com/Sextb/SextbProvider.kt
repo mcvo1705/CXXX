@@ -1,134 +1,162 @@
 package com.Sextb
 
-import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import okhttp3.FormBody
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
+import java.net.URLEncoder
 
 class SextbProvider : MainAPI() {
-    override var mainUrl              = "https://sextb.net"
-    override var name                 = "Sextb"
-    override val hasMainPage          = true
-    override var lang                 = "en"
-    override val hasDownloadSupport   = true
+
+    override var mainUrl = "https://sextb.net"
+    override var name = "Sextb"
+    override val hasMainPage = true
+    override var lang = "en"
+    override val hasDownloadSupport = true
     override val hasChromecastSupport = true
-    override val supportedTypes       = setOf(TvType.NSFW)
-    override val vpnStatus            = VPNStatus.MightBeNeeded
+    override val supportedTypes = setOf(TvType.NSFW)
+    override val vpnStatus = VPNStatus.MightBeNeeded
 
     private val ajaxUrl = "$mainUrl/ajax/player"
+
+    private val domains = listOf(
+        "https://sextb.net",
+        "https://sextb.date"
+    )
 
     override val mainPage = mainPageOf(
         "/amateur" to "Amateur",
         "/censored" to "Censored",
-        "/uncensored" to "Uncensord",
+        "/uncensored" to "Uncensored",
         "/subtitle" to "English Subtitled"
     )
 
+    // ===================== MAIN PAGE =====================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("$mainUrl${request.data}/pg-$page").document
-        val responseList  = document.select(".tray-item").mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(HomePageList(request.name, responseList, isHorizontalImages = false),hasNext = true)
+
+        val results = document.select(".tray-item")
+            .mapNotNull { it.toSearchResult() }
+
+        return newHomePageResponse(
+            HomePageList(request.name, results, isHorizontalImages = false),
+            hasNext = results.isNotEmpty()
+        )
     }
 
-    private fun getRequestBody (episode: String, filmId: String) : FormBody {
-        return FormBody.Builder()
-            .addEncoded("episode", episode)
-            .addEncoded("filmId", filmId)
-            .build()
-    }
-
-    private fun Element.toSearchResult(): SearchResponse {
-        val title = this.select(".tray-item-title").text()
-        val href = mainUrl + this.select("a:nth-of-type(1)").attr("href")
-        val posterUrl = this.selectFirst(".tray-item-thumbnail")?.attr("data-src")
-        return newMovieSearchResponse(title, href, TvType.NSFW) {
-            this.posterUrl = posterUrl
-        }
-    }
-
+    // ===================== SEARCH =====================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
-        val document = app.get("$mainUrl/search/${query.replace(" ", "-")}/pg-$page").document
-        val results = document.select(".tray-item").mapNotNull { it.toSearchResult() }
-        val hasNext = if(results.isEmpty()) false else true
-        return newSearchResponseList(results, hasNext)
+        val encoded = URLEncoder.encode(query, "UTF-8")
+
+        val document = app.get("$mainUrl/search/$encoded/pg-$page").document
+
+        val results = document.select(".tray-item")
+            .mapNotNull { it.toSearchResult() }
+
+        return newSearchResponseList(results, results.isNotEmpty())
     }
 
+    // ===================== LOAD =====================
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
-        val title = document.selectFirst("meta[property=og:title]")?.attr("content")?.trim().toString().replace("| PornHoarder.tv","")
-        val poster = fixUrlNull(document.selectFirst("[property='og:image']")?.attr("content"))
-        val description = document.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
-    
+
+        val title = document.selectFirst("meta[property=og:title]")
+            ?.attr("content")
+            ?.replace("| PornHoarder.tv", "")
+            ?.trim()
+            ?: "Unknown"
+
+        val poster = document.selectFirst("meta[property=og:image]")
+            ?.attr("content")
+
+        val description = document.selectFirst("meta[property=og:description]")
+            ?.attr("content")
+
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
-            this.posterUrl = poster
+            this.posterUrl = poster ?: ""
             this.plot = description
         }
     }
 
+    // ===================== LINKS =====================
     override suspend fun loadLinks(
-    data: String,
-    isCasting: Boolean,
-    subtitleCallback: (SubtitleFile) -> Unit,
-    callback: (ExtractorLink) -> Unit
-): Boolean {
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
 
-    val document = app.get(data).document
+        val document = app.get(data).document
 
-    val sourceId = document
-        .selectFirst(".episode-list .btn-player")
-        ?.attr("data-source")
-        ?: return false
+        val sourceId = document
+            .selectFirst(".episode-list .btn-player")
+            ?.attr("data-source")
+            ?: return false
 
-    val episodeList = document.select(".episode-list .btn-player")
+        // 👉 CHỈ lấy episode đầu để tránh spam request
+        val episode = document.select(".episode-list .btn-player").firstOrNull()
+            ?: return false
 
-    episodeList.forEach { item ->
+        val episodeId = episode.attr("data-id")
 
-        val episodeId = item.attr("data-id")
+        val body = FormBody.Builder()
+            .add("episode", episodeId)
+            .add("filmId", sourceId)
+            .build()
 
-        val requestBody = getRequestBody(episodeId, sourceId)
-
-        val response = app.post(
+        val responseText = app.post(
             ajaxUrl,
-            requestBody = requestBody,
+            requestBody = body,
             headers = mapOf(
                 "Referer" to mainUrl,
                 "X-Requested-With" to "XMLHttpRequest"
             )
-        ).document
+        ).text
 
-        // lấy toàn bộ iframe/server
-        val iframes = response.select("iframe")
+        val responseDoc = Jsoup.parse(responseText)
+
+        val iframes = responseDoc.select("iframe")
 
         iframes.forEachIndexed { index, iframe ->
 
             val iframeSrc = iframe.attr("src")
-                .replace("\\/", "/")
-                .replace("\\\"", "")
                 .substringBefore("?")
+                .trim()
 
-            if (iframeSrc.isNotBlank()) {
+            if (iframeSrc.isBlank()) return@forEachIndexed
 
-                loadExtractor(
-                    iframeSrc,
-                    subtitleCallback
-                ) { link ->
+            loadExtractor(
+                iframeSrc,
+                mainUrl,
+                subtitleCallback
+            ) { link ->
 
-                    callback.invoke(
-                        ExtractorLink(
-                            source = name,
-                            name = "${name} Server ${index + 1}",
-                            url = link.url,
-                            referer = mainUrl,
-                            quality = link.quality,
-                            type = link.type,
-                            headers = link.headers
-                        )
+                callback(
+                    ExtractorLink(
+                        source = name,
+                        name = "$name Server ${index + 1}",
+                        url = link.url,
+                        referer = mainUrl,
+                        quality = link.quality,
+                        type = link.type,
+                        headers = link.headers
                     )
-                }
+                )
             }
         }
+
+        return true
     }
 
-    return true
-  }
+    // ===================== HELPERS =====================
+    private fun Element.toSearchResult(): SearchResponse {
+        val title = select(".tray-item-title").text().trim()
+        val href = mainUrl + select("a:nth-of-type(1)").attr("href")
+        val poster = selectFirst(".tray-item-thumbnail")?.attr("data-src")
+
+        return newMovieSearchResponse(title, href, TvType.NSFW) {
+            this.posterUrl = poster
+        }
+    }
 }
